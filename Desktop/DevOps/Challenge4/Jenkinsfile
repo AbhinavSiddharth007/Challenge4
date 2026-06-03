@@ -1,0 +1,87 @@
+pipeline {
+    agent any
+
+    options {
+        timestamps()
+    }
+
+    parameters {
+        string(
+            name: 'IMAGE_NAME',
+            defaultValue: 'ttl.sh/abhi-challenge4:2h',
+            description: 'Fully qualified ttl.sh image reference to build and deploy.'
+        )
+        string(
+            name: 'KUBE_TOKEN_CREDENTIAL_ID',
+            defaultValue: 'kubernetes-api-token',
+            description: 'Jenkins Secret Text credential ID that stores the Kubernetes bearer token.'
+        )
+    }
+
+    environment {
+        KUBE_SERVER = 'https://kubernetes:6443'
+        DOCKER_BUILDKIT = '1'
+    }
+
+    stages {
+        stage('Build image') {
+            steps {
+                sh '''
+                    set -eu
+                    docker build --platform linux/amd64 -t "${IMAGE_NAME}" Desktop/DevOps/Challenge3
+                '''
+            }
+        }
+
+        stage('Push image') {
+            steps {
+                sh '''
+                    set -eu
+                    docker push "${IMAGE_NAME}"
+                '''
+            }
+        }
+
+        stage('Apply manifests') {
+            steps {
+                withCredentials([string(credentialsId: params.KUBE_TOKEN_CREDENTIAL_ID, variable: 'KUBE_TOKEN')]) {
+                    sh '''
+                        set -eu
+
+                        kubeconfig="$(mktemp)"
+                        rendered_deployment="$(mktemp)"
+                        trap 'rm -f "$kubeconfig" "$rendered_deployment"' EXIT
+
+                        cat > "$kubeconfig" <<EOF
+apiVersion: v1
+kind: Config
+clusters:
+- cluster:
+    server: ${KUBE_SERVER}
+    insecure-skip-tls-verify: true
+  name: challenge-cluster
+users:
+- name: jenkins
+  user:
+    token: ${KUBE_TOKEN}
+contexts:
+- context:
+    cluster: challenge-cluster
+    user: jenkins
+    namespace: default
+  name: challenge
+current-context: challenge
+EOF
+
+                        kubectl --kubeconfig="$kubeconfig" apply -f Desktop/DevOps/Challenge4/k8s/configmap.yaml
+                        kubectl set image -f Desktop/DevOps/Challenge4/k8s/deployment.yaml myapp="${IMAGE_NAME}" --local -o yaml > "$rendered_deployment"
+                        kubectl --kubeconfig="$kubeconfig" apply -f "$rendered_deployment"
+                        kubectl --kubeconfig="$kubeconfig" apply -f Desktop/DevOps/Challenge4/k8s/service.yaml
+                        kubectl --kubeconfig="$kubeconfig" apply -f Desktop/DevOps/Challenge4/k8s/hpa.yaml
+                        kubectl --kubeconfig="$kubeconfig" rollout status deployment/myapp --timeout=180s
+                    '''
+                }
+            }
+        }
+    }
+}
