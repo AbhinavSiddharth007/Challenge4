@@ -1,16 +1,12 @@
-# DEBUG
+# DEBUG — Architecture Mismatch
 
-## Scenario
+## Failure hypotheses
 
-`exec format error` on the Docker VM, which is `x86_64`.
+1. The image was built for the wrong CPU family, most likely `arm64`, while the Docker VM expects `amd64`.
+2. The Go binary inside the image was produced without pinning the target platform, so the build host quietly shaped the artifact.
+3. The runtime image was fine, but the executable copied into it could not be launched on the remote machine.
 
-## 1. Hypotheses, ranked
-
-1. The image was built for the wrong CPU architecture, most likely `arm64` from an Apple Silicon build host.
-2. The final image was produced from the host architecture instead of the target architecture, so the container binary does not match the VM.
-3. The binary was dynamically linked or otherwise built in a way that made it incompatible with the runtime image.
-
-## 2. Verification commands
+## How I checked
 
 ```bash
 docker image inspect ttl.sh/abhi-challenge3:2h --format '{{.Architecture}}'
@@ -18,29 +14,17 @@ file main
 docker inspect ttl.sh/abhi-challenge3:2h
 ```
 
-If I need to confirm what the build produced locally:
+To prove the fix locally, I would rebuild with the target platform pinned and then inspect the image again:
 
 ```bash
 docker build --platform linux/amd64 -t ttl.sh/abhi-challenge3:2h .
 docker image inspect ttl.sh/abhi-challenge3:2h --format '{{.Architecture}}'
 ```
 
-## 3. Fix
+## Fix
 
-- Build the image for the Docker VM explicitly:
+I made the Docker build explicitly target `linux/amd64` and cross-compiled the Go binary with `CGO_ENABLED=0`, `GOOS=linux`, and `GOARCH=amd64`. That keeps the release image aligned with the x86_64 Docker VM instead of whatever architecture happened to be available on the machine that ran Jenkins.
 
-```bash
-docker build --platform linux/amd64 -t ttl.sh/abhi-challenge3:2h .
-```
+## Lesson
 
-- Cross-compile the Go binary inside Docker:
-
-```bash
-CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o main
-```
-
-- Keep the runtime stage aligned with the target architecture.
-
-## 4. Lesson
-
-A built image does not guarantee runtime compatibility with the host architecture.
+A successful build only matters if the artifact can actually execute on the host you deploy to.

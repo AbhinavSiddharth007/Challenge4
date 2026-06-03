@@ -7,8 +7,10 @@ import (
 	"os"
 )
 
-type messageResponse struct {
-	Message string `json:"message"`
+type homeResponse struct {
+	Name        string
+	Description string
+	Url         string
 }
 
 type statusResponse struct {
@@ -18,7 +20,11 @@ type statusResponse struct {
 func main() {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
-		writeJSON(w, http.StatusOK, messageResponse{Message: "Hello, World!"})
+		writeJSON(w, http.StatusOK, homeResponse{
+			Name:        "Hello",
+			Description: "World",
+			Url:         r.Host,
+		})
 	})
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, statusResponse{Status: "ok"})

@@ -1,24 +1,13 @@
 # PROMPTS
 
-## 1. What I asked the agent
+## What I asked for
 
-- Build a Dockerfile for a Go service that listens on port 4444.
-- Make the image production-ready with a multi-stage build and a static binary.
-- Create a Jenkins pipeline that builds, pushes to `ttl.sh`, and deploys to a remote Docker VM.
-- Add the required documentation files for decisions and debugging notes.
+I asked for a production-style Docker setup around the existing Go service: build the binary inside a multi-stage image, publish it to `ttl.sh`, and then deploy that image onto the remote Docker VM without changing the required port `4444`.
 
-## 2. What decisions were made
+## What I decided
 
-- Chose a multi-stage Dockerfile so the final image only contains the runtime binary.
-- Used `CGO_ENABLED=0` and cross-compilation flags so the binary is static and portable.
-- Used `gcr.io/distroless/static-debian12:nonroot` as the final image to keep the runtime small.
-- Kept the service on port 4444 end-to-end to match the challenge requirements.
-- Built the image as `linux/amd64` in Jenkins so it can run on an x86_64 Docker VM.
-- Used `ttl.sh` because it does not require auth for short-lived challenge images.
+I kept the runtime small by using a distroless final image and a static Go build. I also forced the Jenkins build to target `linux/amd64`, because the remote machine that runs the challenge verification is x86_64 and I didn’t want a local laptop architecture to leak into the release artifact.
 
-## 3. What I pushed back on / corrected
+## What I pushed back on
 
-- Rejected a single-stage Dockerfile because it would ship build tools in the final image.
-- Corrected the build target so the deployed image is amd64 instead of an ARM-only image.
-- Kept the deploy stage as an SSH-based remote `docker pull` + `docker run` flow instead of assuming local access to the Docker VM.
-- Kept the port mapping at `4444:4444` to avoid mismatches between the container and the verifier.
+I avoided a single-stage Dockerfile because it would have bundled build tooling into the final image. I also rejected any deploy flow that assumed the Docker VM was reachable locally from Jenkins, since the real handoff happens over SSH and the image needs to be pulled on the target host before the container starts.
