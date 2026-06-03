@@ -1,80 +1,35 @@
-# CS411 Challenge 4: Deploy Application to Kubernetes with Jenkins
+# CS411 Challenge 4
 
-This repository contains the Kubernetes deployment assets and Jenkins pipeline for the CS411 Challenge 4 submission.
+This folder holds the deployment side of the challenge. I kept the actual application code where it already lived and focused this part of the repository on the Kubernetes and Jenkins pieces that turn that app into something deployable.
 
-The goal is to build the Go application image, push it to `ttl.sh`, and deploy the application into Kubernetes with a Jenkins pipeline.
+The workflow is simple on purpose: Jenkins builds the image, pushes it to `ttl.sh`, talks to the Kubernetes API with a Secret Text credential, and then applies the manifests that make up the release.
 
-## What’s Included
+## How it fits together
 
-- `Jenkinsfile` - builds the image, pushes it to `ttl.sh`, authenticates to Kubernetes, and applies the manifests
-- `k8s/deployment.yaml` - Kubernetes Deployment for `myapp`
-- `k8s/service.yaml` - ClusterIP Service for in-cluster access
-- `k8s/configmap.yaml` - Application settings injected into the pod
-- `k8s/hpa.yaml` - HorizontalPodAutoscaler using `autoscaling/v2`
-- `DEBUG.md` - seeded bug write-up and fixes
-- `PROMPTS.md` - engineering decision log
-- `.gitignore` - keeps build artifacts and local junk out of the repo
+The app listens on port `4444`, so every Kubernetes object is wired around that same port. The Deployment runs one replica, injects config from a ConfigMap, and uses readiness and liveness probes on `/` so Kubernetes only sends traffic when the app is actually responding. The Service gives the pod a stable in-cluster address, and the HPA keeps the replica count between `1` and `3` based on CPU usage.
 
-## Application Summary
+## Files worth knowing
 
-- The application listens on port `4444`
-- The root endpoint `/` is used by the readiness and liveness probes
-- The Deployment consumes environment variables from a ConfigMap
-- The Service exposes the app inside the cluster on port `4444`
+- `Jenkinsfile` drives build, push, apply, and rollout verification
+- `k8s/deployment.yaml` defines the `myapp` Deployment
+- `k8s/service.yaml` exposes the app on port `4444`
+- `k8s/configmap.yaml` stores basic runtime settings
+- `k8s/hpa.yaml` enables autoscaling with `autoscaling/v2`
+- `DEBUG.md` explains the seeded Kubernetes bugs and their fixes
+- `PROMPTS.md` records the decisions I made while solving the challenge
 
-## Jenkins Pipeline
+## Jenkins details
 
-The pipeline performs these steps:
+The pipeline expects two main inputs:
 
-1. Build the Docker image
-2. Push the image to `ttl.sh`
-3. Authenticate to the Kubernetes API at `https://kubernetes:6443`
-4. Apply the ConfigMap, Deployment, Service, and HPA manifests
-5. Wait for `kubectl rollout status deployment/myapp`
+- `IMAGE_NAME`, which defaults to a short-lived `ttl.sh` tag
+- `KUBE_TOKEN_CREDENTIAL_ID`, which points at the Jenkins Secret Text credential for the Kubernetes bearer token
 
-### Jenkins parameters
+It connects to `https://kubernetes:6443`, applies the manifests with `kubectl apply -f`, and finishes by waiting on `kubectl rollout status deployment/myapp`.
 
-- `IMAGE_NAME` - fully qualified `ttl.sh` image reference
-- `KUBE_TOKEN_CREDENTIAL_ID` - Jenkins Secret Text credential ID that stores the Kubernetes bearer token
+## What to verify
 
-## Kubernetes Resources
-
-### Deployment
-
-- Name: `myapp`
-- Replicas: `1`
-- Label selector: `app: myapp`
-- Container port: `4444`
-- Readiness probe: `GET /` on port `4444`
-- Liveness probe: `GET /` on port `4444`
-- Memory requests and limits are configured
-
-### Service
-
-- Type: `ClusterIP`
-- Selector: `app: myapp`
-- Port: `4444`
-- Target port: `4444`
-
-### ConfigMap
-
-The ConfigMap is named `myapp-config` and provides example values such as:
-
-- `APP_NAME=myapp`
-- `PORT=4444`
-- `LOG_LEVEL=info`
-
-### HPA
-
-- Targets the `myapp` Deployment
-- Minimum replicas: `1`
-- Maximum replicas: `3`
-- CPU target: `70%`
-- API version: `autoscaling/v2`
-
-## Verification
-
-After the pipeline runs, verify the deployment with:
+After the pipeline runs, the basic checks should all line up:
 
 ```bash
 kubectl get deployment
@@ -82,19 +37,14 @@ kubectl get pods
 kubectl get svc
 kubectl get hpa
 kubectl get endpoints
-kubectl rollout status deployment/myapp
 ```
 
-Expected results:
+The deployment should be available, the pod should be Ready, the Service should have endpoints, and the HPA should exist with the expected replica bounds.
 
-- Deployment is available
-- Pod is Ready
-- Service has endpoints
-- HPA is created successfully
+## Small but important details
 
-## Notes
-
-- The image is intended to be short-lived and hosted on `ttl.sh`
-- The Kubernetes credential should be created in Jenkins as a Secret Text credential
-- The pipeline assumes access to a Kubernetes API endpoint at `https://kubernetes:6443`
-- The application source used for the Docker build lives in the repository’s existing challenge folder structure
+- The Service selector must match `app: myapp`
+- The probes must use port `4444`
+- The Deployment includes memory requests and limits
+- The ConfigMap is mounted through environment variables rather than hardcoded values
+- The image is meant to be temporary because `ttl.sh` is used for the registry
