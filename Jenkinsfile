@@ -2,8 +2,7 @@ pipeline {
     agent any
 
     environment {
-        IMAGE_NAME  = "ttl.sh/abhi-challenge4:2h"
-        KUBE_SERVER = "https://kubernetes:6443"
+        IMAGE_NAME = "ttl.sh/abhi-challenge4:2h"
     }
 
     stages {
@@ -28,39 +27,26 @@ pipeline {
 
         stage('Deploy to Kubernetes') {
             steps {
-                withCredentials([string(credentialsId: 'k8s-token', variable: 'KUBE_TOKEN')]) {
+                withCredentials([
+                    file(credentialsId: 'kubeconfig-file', variable: 'KUBECONFIG_FILE')
+                ]) {
                     sh '''
                         set -eu
 
-                        export KUBECONFIG=$PWD/kubeconfig
+                        export KUBECONFIG=$KUBECONFIG_FILE
 
-                        cat > kubeconfig <<EOF
-apiVersion: v1
-kind: Config
-clusters:
-- cluster:
-    insecure-skip-tls-verify: true
-    server: $KUBE_SERVER
-  name: lab
-contexts:
-- context:
-    cluster: lab
-    user: jenkins
-  name: lab
-current-context: lab
-users:
-- name: jenkins
-  user:
-    token: $KUBE_TOKEN
-EOF
+                        echo "Checking cluster connection..."
+                        kubectl get nodes
 
-                        echo "Testing cluster connection..."
-                        kubectl get nodes || true
-
-                        echo "Applying deployment..."
+                        echo "Applying Kubernetes manifests..."
                         kubectl apply -f k8s/deployment.yaml
 
-                        kubectl rollout status deployment/myapp --timeout=120s || true
+                        echo "Restarting pod (optional)..."
+                        kubectl delete pod myapp --ignore-not-found
+                        kubectl apply -f k8s/pod.yaml
+
+                        echo "Waiting for pod to be ready..."
+                        kubectl wait --for=condition=Ready pod/myapp --timeout=120s
                     '''
                 }
             }
