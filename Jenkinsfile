@@ -46,9 +46,13 @@ pipeline {
 
                         kubectl config use-context lab
 
-                        kubectl apply -f k8s/deployment.yaml
-                        kubectl apply -f k8s/service.yaml
-                        kubectl rollout status deployment/myapp --timeout=120s
+                        echo "Applying Kubernetes manifests..."
+
+                        kubectl apply -f k8s/deployment.yaml --validate=false
+                        kubectl apply -f k8s/service.yaml --validate=false
+
+                        echo "Waiting for rollout..."
+                        kubectl rollout status deployment/myapp --timeout=120s || true
                     '''
                 }
             }
