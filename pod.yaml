@@ -9,6 +9,14 @@ spec:
     - name: myapp
       image: ttl.sh/abhi-challenge4:2h
       imagePullPolicy: Always
+
+      # The Go app reads $PORT (defaults to 8080). The probes and containerPort
+      # below use 4444, so we MUST tell the app to listen on 4444 or it never
+      # becomes Ready.
+      env:
+        - name: PORT
+          value: "4444"
+
       ports:
         - containerPort: 4444
 
