@@ -2,8 +2,7 @@ pipeline {
     agent any
 
     environment {
-        IMAGE_NAME  = "ttl.sh/abhi-challenge4:2h"
-        KUBE_SERVER = "https://kubernetes:6443"
+        IMAGE_NAME = "ttl.sh/abhi-challenge4:2h"
     }
 
     stages {
@@ -12,7 +11,7 @@ pipeline {
             steps {
                 sh '''
                     set -eu
-                    docker build --platform linux/amd64 -t "$IMAGE_NAME" .
+                    docker build --platform linux/amd64 -t $IMAGE_NAME .
                 '''
             }
         }
@@ -21,7 +20,7 @@ pipeline {
             steps {
                 sh '''
                     set -eu
-                    docker push "$IMAGE_NAME"
+                    docker push $IMAGE_NAME
                 '''
             }
         }
@@ -32,8 +31,10 @@ pipeline {
                     sh '''
                         set -eu
 
+                        export KUBECONFIG=$WORKSPACE/kubeconfig
+
                         kubectl config set-cluster lab \
-                          --server=$KUBE_SERVER \
+                          --server=https://kubernetes:6443 \
                           --insecure-skip-tls-verify=true
 
                         kubectl config set-credentials jenkins \
@@ -45,9 +46,9 @@ pipeline {
 
                         kubectl config use-context lab
 
-                        kubectl delete pod myapp --ignore-not-found
-                        kubectl apply -f pod.yaml
-                        kubectl wait --for=condition=Ready pod/myapp --timeout=120s
+                        kubectl apply -f k8s/deployment.yaml
+                        kubectl apply -f k8s/service.yaml
+                        kubectl rollout status deployment/myapp --timeout=120s
                     '''
                 }
             }
