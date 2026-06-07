@@ -1,0 +1,37 @@
+apiVersion: v1
+kind: Pod
+metadata:
+  name: myapp
+  labels:
+    app: myapp
+spec:
+  containers:
+    - name: myapp
+      image: ttl.sh/abhi-challenge4:2h
+      imagePullPolicy: Always
+      ports:
+        - containerPort: 4444
+
+      livenessProbe:
+        httpGet:
+          path: /
+          port: 4444
+        initialDelaySeconds: 3
+        periodSeconds: 10
+
+      readinessProbe:
+        httpGet:
+          path: /
+          port: 4444
+        initialDelaySeconds: 2
+        periodSeconds: 5
+
+      resources:
+        requests:
+          memory: "32Mi"
+          cpu: "50m"
+        limits:
+          memory: "64Mi"
+          cpu: "200m"
+
+  restartPolicy: Always
