@@ -1,17 +1,17 @@
 pipeline {
     agent any
 
-    // The credential ID is parameterized (per the project's documented design) so the
-    // Kubernetes token can be rotated/swapped without editing the pipeline.
+    // Credential ID is parameterized so the Kubernetes token can be rotated without
+    // editing the pipeline.
     parameters {
         string(
             name: 'IMAGE_NAME',
             defaultValue: 'ttl.sh/abhi-challenge4:2h',
-            description: 'Image tag pushed to ttl.sh (intentionally short-lived).'
+            description: 'Image tag pushed to ttl.sh (intentionally short-lived: the ":2h" tag expires 2h after push).'
         )
         string(
             name: 'KUBE_TOKEN_CREDENTIAL_ID',
-            defaultValue: 'kube-token',
+            defaultValue: 'k8s-token',
             description: 'ID of the Jenkins "Secret text" credential holding the Kubernetes ServiceAccount bearer token.'
         )
         string(
@@ -23,6 +23,11 @@ pipeline {
             name: 'KUBE_NAMESPACE',
             defaultValue: 'default',
             description: 'Namespace to deploy into.'
+        )
+        string(
+            name: 'POD_MANIFEST',
+            defaultValue: 'k8s/pod.yaml',
+            description: 'Path to the Pod manifest (adjust if yours lives at ./pod.yaml).'
         )
     }
 
@@ -56,25 +61,18 @@ pipeline {
                 withCredentials([
                     string(credentialsId: params.KUBE_TOKEN_CREDENTIAL_ID, variable: 'KUBE_TOKEN')
                 ]) {
-                    // NOTE: single-quoted heredoc + shell-level expansion means the token value
-                    // is never printed in the Jenkins-echoed command (only the literal $KUBE_TOKEN).
-                    // Do NOT add `set -x` here, and do NOT echo $KUBE_TOKEN.
+                    // Single-quoted block + shell-level expansion => the token value is never
+                    // printed (only the literal $KUBE_TOKEN). Do NOT add `set -x` here.
                     sh '''
                         set -eu
 
-                        # ---------------------------------------------------------------
-                        # Build an isolated kubeconfig for THIS build only, then clean up.
-                        # ---------------------------------------------------------------
+                        # Isolated kubeconfig for THIS build only, cleaned up on exit.
                         export KUBECONFIG="$(pwd)/.kubeconfig.$$"
                         trap 'rm -f "$KUBECONFIG"' EXIT
                         : > "$KUBECONFIG"
                         chmod 600 "$KUBECONFIG"
 
-                        # ---- Cluster entry --------------------------------------------
-                        # Prefer the in-cluster CA when the agent runs inside Kubernetes.
-                        # Otherwise skip TLS verification: acceptable for this short-lived
-                        # ttl.sh challenge, but for production supply the cluster CA instead
-                        # (see the "more secure variant" note in the accompanying explanation).
+                        # ---- Cluster entry (prefer in-cluster CA; else skip TLS verify) ----
                         CA_FILE="/var/run/secrets/kubernetes.io/serviceaccount/ca.crt"
                         if [ -f "$CA_FILE" ]; then
                             echo "Using in-cluster CA for TLS verification."
@@ -89,21 +87,14 @@ pipeline {
                                 --insecure-skip-tls-verify=true
                         fi
 
-                        # ---- Credentials: the bearer token from the Jenkins Secret text -
                         kubectl config set-credentials jenkins-deployer --token="$KUBE_TOKEN"
-
-                        # ---- Context --------------------------------------------------
                         kubectl config set-context challenge \
                             --cluster=challenge-cluster \
                             --user=jenkins-deployer \
                             --namespace="$KUBE_NAMESPACE"
                         kubectl config use-context challenge
 
-                        # ---------------------------------------------------------------
-                        # Debugging: current context, cluster info, authentication status.
-                        # All wrapped so every line prints even if one fails, giving a full
-                        # picture before the (hard-gated) apply below.
-                        # ---------------------------------------------------------------
+                        # ---- Debug: context, cluster info, auth status --------------------
                         echo "=== Current context ==="
                         kubectl config current-context || true
 
@@ -111,22 +102,32 @@ pipeline {
                         kubectl cluster-info || true
 
                         echo "=== Authentication status ==="
-                        kubectl auth whoami 2>/dev/null || echo "(kubectl auth whoami not supported on this kubectl/server version)"
-                        if kubectl auth can-i create deployments -n "$KUBE_NAMESPACE" >/dev/null 2>&1; then
-                            echo "RBAC: ServiceAccount CAN create deployments in $KUBE_NAMESPACE"
+                        kubectl auth whoami 2>/dev/null || echo "(kubectl auth whoami not supported on this version)"
+                        if kubectl auth can-i create pods -n "$KUBE_NAMESPACE" >/dev/null 2>&1; then
+                            echo "RBAC: ServiceAccount CAN create pods in $KUBE_NAMESPACE"
                         else
-                            echo "RBAC: ServiceAccount CANNOT create deployments in $KUBE_NAMESPACE (check its RoleBinding)"
+                            echo "RBAC: ServiceAccount CANNOT create pods in $KUBE_NAMESPACE (check its RoleBinding)"
                         fi
 
-                        # ---- Apply manifests ------------------------------------------
-                        echo "=== Applying manifests ==="
-                        kubectl apply -n "$KUBE_NAMESPACE" -f k8s/deployment.yaml
-                        # If you also keep service/configmap/hpa manifests, apply them here, e.g.:
-                        #   kubectl apply -n "$KUBE_NAMESPACE" -f k8s/service.yaml -f k8s/configmap.yaml -f k8s/hpa.yaml
+                        # ---- Deploy the Pod ------------------------------------------------
+                        # Recreate so the kubelet pulls the freshly-pushed image (the ttl.sh
+                        # tag is reused; imagePullPolicy: Always re-pulls on each start).
+                        echo "=== Applying Pod manifest ==="
+                        kubectl delete pod myapp -n "$KUBE_NAMESPACE" --ignore-not-found
+                        kubectl apply -n "$KUBE_NAMESPACE" -f "$POD_MANIFEST"
 
-                        # ---- Verify rollout -------------------------------------------
-                        echo "=== Waiting for rollout ==="
-                        kubectl rollout status deployment/myapp -n "$KUBE_NAMESPACE" --timeout=120s
+                        # ---- Verify the Pod is Ready, with diagnostics on failure ---------
+                        echo "=== Waiting for Pod myapp to be Ready ==="
+                        kubectl wait --for=condition=Ready pod/myapp -n "$KUBE_NAMESPACE" --timeout=120s || {
+                            echo "Pod did not become Ready. Diagnostics:"
+                            kubectl describe pod myapp -n "$KUBE_NAMESPACE" || true
+                            echo "--- Recent events ---"
+                            kubectl get events -n "$KUBE_NAMESPACE" --sort-by=.lastTimestamp | tail -n 30 || true
+                            exit 1
+                        }
+
+                        echo "=== Pod is Ready ==="
+                        kubectl get pod myapp -n "$KUBE_NAMESPACE" -o wide
                     '''
                 }
             }
